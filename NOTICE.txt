@@ -1,0 +1,1 @@
+TineTech Nexus Tower is an early software foundation. The visual workforce simulation is not a claim that 1,000 real employees or AI agents are operational. Do not connect production credentials until authentication, authorization, approvals, and real operation adapters have been reviewed and tested.
