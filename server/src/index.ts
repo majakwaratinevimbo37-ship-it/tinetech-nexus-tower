@@ -3,6 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { Server } from 'socket.io';
 import { Pool } from 'pg';
 import { createNexusBrain } from './brain.js';
@@ -132,6 +133,17 @@ app.post('/api/website/action', async (req,res)=>{
 });
 
 io.on('connection',socket=>{socket.emit('website:health',lastHealth);socket.emit('brain:status',brain.status());socket.emit('tower:hello',{connected:true,agentExecution:brain.status().configured,workers:1000,at:new Date().toISOString()});});
+
+// Serve the Vite-built frontend from the same Render web service.
+// API endpoints above remain registered before this SPA fallback.
+const clientDistPath = path.resolve(process.cwd(), 'client', 'dist');
+app.use(express.static(clientDistPath));
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api/') || req.path.startsWith('/socket.io/')) return next();
+  res.sendFile(path.join(clientDistPath, 'index.html'), (error) => {
+    if (error) next(error);
+  });
+});
 
 await initDatabase();
 httpServer.listen(PORT,'0.0.0.0',()=>console.log(`Nexus Tower API listening on :${PORT}`));
