@@ -36,6 +36,28 @@ type BrainOptions = {
 };
 
 const MODEL = (process.env.GEMINI_MODEL || 'gemini-3.8-flash').trim();
+const requestedGeminiTimeout = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS || 45000);
+const GEMINI_REQUEST_TIMEOUT_MS = Number.isFinite(requestedGeminiTimeout)
+  ? Math.max(10000, Math.min(120000, requestedGeminiTimeout))
+  : 45000;
+
+async function withGeminiTimeout<T>(request: Promise<T>, label: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      request,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`Gemini ${label} timed out after ${GEMINI_REQUEST_TIMEOUT_MS / 1000} seconds. Check the Gemini API key, model access, quota, and network connectivity.`)),
+          GEMINI_REQUEST_TIMEOUT_MS
+        );
+      })
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
 const requestedQueueSize = Number(process.env.BRAIN_MAX_QUEUE || 30);
 const MAX_QUEUE = Number.isFinite(requestedQueueSize)
   ? Math.max(5, Math.min(100, requestedQueueSize))
@@ -270,7 +292,9 @@ export function createNexusBrain(options: BrainOptions) {
   }
 
   async function generatePlan(order: NexusOrder) {
-    const response = await client().models.generateContent({
+    console.info('Gemini planning request started', { taskId: order.id, model: MODEL });
+    const response = await withGeminiTimeout(
+      client().models.generateContent({
       model: MODEL,
       contents: [
         'You are the planning core of TineTech Nexus Tower.',
@@ -292,7 +316,10 @@ export function createNexusBrain(options: BrainOptions) {
         temperature: 0.2,
         maxOutputTokens: 1800
       }
-    });
+      }),
+      'planning request'
+    );
+    console.info('Gemini planning request completed', { taskId: order.id, model: MODEL });
 
     const parsed = parseJson<{
       summary?: unknown;
@@ -347,7 +374,8 @@ export function createNexusBrain(options: BrainOptions) {
     subtask: { title: string; department: string; rationale?: string },
     index: number
   ) {
-    const response = await client().models.generateContent({
+    const response = await withGeminiTimeout(
+      client().models.generateContent({
       model: MODEL,
       contents: [
         `You are a specialist agent in TineTech Nexus Tower.`,
@@ -365,7 +393,9 @@ export function createNexusBrain(options: BrainOptions) {
         temperature: 0.35,
         maxOutputTokens: 1400
       }
-    });
+      }),
+      'specialist request'
+    );
 
     const output = safeText(response.text, 8000);
 
@@ -517,6 +547,7 @@ export function createNexusBrain(options: BrainOptions) {
       await save(order);
     } catch (error) {
       const message = errorMessage(error);
+      console.error('Nexus task execution failed', { taskId: order.id, model: MODEL, error: message });
 
       failed++;
       lastError = message;
