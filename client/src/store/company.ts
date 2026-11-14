@@ -13,6 +13,15 @@ type AlertLevel = 'info' | 'warning' | 'critical';
 const API_URL = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
 const SOCKET_URL = API_URL || window.location.origin;
 
+function getAdminToken() {
+  const existing = sessionStorage.getItem('nexus_admin_token');
+  if (existing) return existing;
+  const entered = window.prompt('Enter your Nexus access token to connect securely:');
+  const token = entered?.trim() || '';
+  if (token) sessionStorage.setItem('nexus_admin_token', token);
+  return token;
+}
+
 const definitions: Omit<Department, 'count'>[] = [
   { id: 'exec', name: 'Executive Office', floor: 12, short: 'EXE', color: '#d9b56d', focus: 'Strategy & governance' },
   { id: 'engineering', name: 'Engineering & Technology', floor: 10, short: 'ENG', color: '#58d7d0', focus: 'Build, review and maintain products' },
@@ -190,6 +199,8 @@ export const useCompany = create<CompanyStore>((set, get) => ({
   toggleMode: () => set(s => ({ nightMode: !s.nightMode })),
 
   issueCommand: async (text, department, priority = 'high') => {
+    const token = getAdminToken();
+    if (!token) return false;
     const dept = get().departments.find(d => d.id === department) || get().departments[1];
     const tempId = `LOCAL-${Date.now()}`;
 
@@ -218,7 +229,7 @@ export const useCompany = create<CompanyStore>((set, get) => ({
     try {
       const response = await fetch(`${API_URL}/api/agent/command`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ title: text, department: dept.id, priority, source: 'president' })
       });
 
@@ -280,9 +291,12 @@ export const useCompany = create<CompanyStore>((set, get) => ({
 
   syncBackend: async () => {
     try {
+      const token = getAdminToken();
+      if (!token) return;
+      const headers = { Authorization: `Bearer ${token}` };
       const [brainRes, ordersRes] = await Promise.all([
-        fetch(`${API_URL}/api/brain/status`),
-        fetch(`${API_URL}/api/work-orders`)
+        fetch(`${API_URL}/api/brain/status`, { headers }),
+        fetch(`${API_URL}/api/work-orders`, { headers })
       ]);
 
       if (brainRes.ok) {
@@ -360,6 +374,7 @@ export const useCompany = create<CompanyStore>((set, get) => ({
     if (socket) return;
 
     socket = io(SOCKET_URL, {
+      auth: { token: getAdminToken() },
       autoConnect: true,
       timeout: 5000,
       reconnectionAttempts: 5,
