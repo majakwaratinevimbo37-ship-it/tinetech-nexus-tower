@@ -19,7 +19,7 @@ A browser-based executive command centre for TineTech, built with React, TypeScr
 
 The 1,000 tower workers remain **simulated roster identities**, not 1,000 independently running AI processes or human employees. The central brain activates a small number of department-specialist prompts per directive. This balanced strategy avoids making 1,000 simultaneous API calls. Gemini generates plans, analyses and drafts from the information in the task; it does not automatically inspect private repositories or production systems. Review all generated work before relying on it.
 
-The queue only runs while the backend process is running. For tasks to continue while your laptop is off, the backend must be deployed to a reliable server and configured with the Gemini secret there. This package has not been deployed for you.
+The queue runs while the backend process is running. Deploy the backend on Render and configure its server-side secrets and PostgreSQL connection for work to continue while your laptop is off.
 
 ## Requirements
 
@@ -27,7 +27,7 @@ The queue only runs while the backend process is running. For tasks to continue 
 - npm 10+
 - Internet access to install packages and call the Gemini API
 - A Google Gemini API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
-- Optional PostgreSQL for durable task and audit records
+- PostgreSQL for durable production task and audit records
 
 Gemini API usage has provider quota and may incur charges. Set usage limits or billing alerts in the provider account. Do not share the key.
 
@@ -65,7 +65,7 @@ If the API key is absent, tasks fail safely as blocked with a setup message. The
 ## How a directive flows
 
 1. The UI posts the objective, department and priority to `POST /api/agent/command`.
-2. The server validates the request and places it in a bounded in-memory queue.
+2. The server authenticates the request, writes the work order to PostgreSQL in production, then places it in the bounded worker queue.
 3. Gemini creates a short plan with up to four department assignments.
 4. Specialist prompts produce drafts in controlled parallel calls.
 5. The server stores status, progress, output and errors; Socket.IO sends updates to the dashboard.
@@ -81,7 +81,8 @@ All API routes except `GET /api/health` and `GET /api/website/health` require `A
 - `GET /api/work-orders` — work-order list
 - `POST /api/work-orders` — enqueue a Gemini-backed work order
 - `POST /api/agent/plan` — compatibility endpoint that now enqueues a Gemini-backed task
-- `GET /api/website/health` and `POST /api/website/check` — read-only public website reachability probe
+- `GET /api/website/health` — public read-only website reachability probe
+- `POST /api/website/check` — authenticated read-only website probe
 - `GET /api/audit` — recent audit events
 - `POST /api/website/action` — deliberately blocked for production mutations
 
