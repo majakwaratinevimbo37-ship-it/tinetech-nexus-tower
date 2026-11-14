@@ -552,9 +552,20 @@ export function createNexusBrain(options: BrainOptions) {
 
   async function restore() {
     const saved = await load();
+    let recovered = 0;
     for (const order of saved) {
       orders.set(order.id, order);
       if (['queued', 'assigned', 'in_progress'].includes(order.status)) {
+        if (recovered >= MAX_QUEUE) {
+          order.status = 'blocked';
+          order.progress = 0;
+          order.owner = 'Nexus Brain · recovery limit reached';
+          order.error = `Recovery queue limit (${MAX_QUEUE}) reached. Re-submit this task after the queue clears.`;
+          failed++;
+          await save(order);
+          continue;
+        }
+        recovered++;
         order.status = 'queued';
         order.progress = 0;
         order.owner = 'Nexus Brain · recovered after restart';
