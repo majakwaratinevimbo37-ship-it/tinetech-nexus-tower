@@ -14,6 +14,9 @@ const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT || 4000);
 const ADMIN_TOKEN = (process.env.NEXUS_ADMIN_TOKEN || '').trim();
+if (ADMIN_TOKEN && ADMIN_TOKEN.length < 32) {
+  throw new Error('NEXUS_ADMIN_TOKEN must contain at least 32 characters.');
+}
 
 function hasValidAdminToken(value: unknown) {
   if (!ADMIN_TOKEN || typeof value !== 'string') return false;
