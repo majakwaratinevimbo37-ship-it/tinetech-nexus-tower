@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Server } from 'socket.io';
@@ -13,6 +13,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT || 4000);
+const ADMIN_TOKEN = (process.env.NEXUS_ADMIN_TOKEN || '').trim();
+
+function hasValidAdminToken(value: unknown) {
+  if (!ADMIN_TOKEN || typeof value !== 'string') return false;
+  const supplied = Buffer.from(value);
+  const expected = Buffer.from(ADMIN_TOKEN);
+  return supplied.length === expected.length && timingSafeEqual(supplied, expected);
+}
 const WEBSITE_URL = process.env.WEBSITE_URL || 'https://tinetech-nexus-tower.onrender.com';
 
 const allowedOrigins = (
@@ -26,6 +34,11 @@ const io = new Server(httpServer, {
   cors: { origin: allowedOrigins, methods: ['GET', 'POST'] }
 });
 
+io.use((socket, next) => {
+  if (hasValidAdminToken(socket.handshake.auth?.token)) return next();
+  next(new Error('Nexus authentication required.'));
+});
+
 app.use(cors({
   origin(origin, cb) {
     if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
@@ -36,6 +49,19 @@ app.use(cors({
 }));
 
 app.use(express.json({ limit: '256kb' }));
+
+app.use('/api', (req, res, next) => {
+  if (req.path === '/health' || req.path === '/website/health') return next();
+  if (!ADMIN_TOKEN) {
+    return res.status(503).json({ error: 'Nexus API is locked. Configure NEXUS_ADMIN_TOKEN on the server.' });
+  }
+  const authorization = req.header('authorization') || '';
+  const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+  if (!hasValidAdminToken(token)) {
+    return res.status(401).json({ error: 'Nexus authentication required.' });
+  }
+  next();
+});
 
 const startedAt = Date.now();
 
@@ -298,13 +324,14 @@ const brain = createNexusBrain({
   audit: (action, actor, details, result) => {
     logAudit(action, actor, details, result);
   },
-  persist: persistOrder
+  persist: persistOrder,
+  load: async () => [...workOrders.values()]
 });
 
 app.get('/api/brain/status', (_req, res) => res.json(brain.status()));
 app.get('/api/brain/tasks', (_req, res) => res.json(brain.listOrders().slice(0, 100)));
 
-app.post('/api/agent/command', limitAiCommands, (req, res) => {
+app.post('/api/agent/command', limitAiCommands, async (req, res) => {
   const {
     title,
     objective,
@@ -314,7 +341,7 @@ app.post('/api/agent/command', limitAiCommands, (req, res) => {
   } = req.body || {};
 
   try {
-    const order = brain.enqueue({
+    const order = await brain.enqueue({
       title: typeof title === 'string' ? title : objective,
       department,
       priority: ['normal', 'high', 'critical'].includes(priority) ? priority : 'normal',
@@ -409,7 +436,7 @@ app.get('/api/work-orders', async (_req, res) => {
   );
 });
 
-app.post('/api/work-orders', limitAiCommands, (req, res) => {
+app.post('/api/work-orders', limitAiCommands, async (req, res) => {
   const {
     title,
     department,
@@ -418,7 +445,7 @@ app.post('/api/work-orders', limitAiCommands, (req, res) => {
   } = req.body || {};
 
   try {
-    const order = brain.enqueue({
+    const order = await brain.enqueue({
       title,
       department,
       priority: ['normal', 'high', 'critical'].includes(priority) ? priority : 'normal',
@@ -439,7 +466,7 @@ app.post('/api/work-orders', limitAiCommands, (req, res) => {
 
 app.get('/api/audit', (_req, res) => res.json(audit.slice(0, 100)));
 
-app.post('/api/agent/plan', limitAiCommands, (req, res) => {
+app.post('/api/agent/plan', limitAiCommands, async (req, res) => {
   const {
     objective,
     department = 'engineering',
@@ -447,7 +474,7 @@ app.post('/api/agent/plan', limitAiCommands, (req, res) => {
   } = req.body || {};
 
   try {
-    const order = brain.enqueue({
+    const order = await brain.enqueue({
       title: objective,
       department,
       priority: ['normal', 'high', 'critical'].includes(priority) ? priority : 'normal',
@@ -534,6 +561,7 @@ app.get('*', (req, res, next) => {
 });
 
 await initDatabase();
+await brain.restore();
 
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`Nexus Tower API listening on :${PORT}`);
