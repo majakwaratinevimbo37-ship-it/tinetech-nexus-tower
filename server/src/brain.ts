@@ -32,6 +32,7 @@ type BrainOptions = {
   io: { emit: (event: string, data: unknown) => void };
   audit: (action: string, actor: string, details: unknown, result?: string) => void;
   persist: (order: NexusOrder) => Promise<void>;
+  load: () => Promise<NexusOrder[]>;
 };
 
 const MODEL = (process.env.GEMINI_MODEL || 'gemini-3.8-flash').trim();
@@ -123,7 +124,7 @@ function errorMessage(error: unknown): string {
 }
 
 export function createNexusBrain(options: BrainOptions) {
-  const { io, audit, persist } = options;
+  const { io, audit, persist, load } = options;
 
   const queue: string[] = [];
   const orders = new Map<string, NexusOrder>();
@@ -200,12 +201,12 @@ export function createNexusBrain(options: BrainOptions) {
     emitStatus();
   }
 
-  function enqueue(input: {
+  async function enqueue(input: {
     title: string;
     department: string;
     priority?: Priority;
     source?: string;
-  }): NexusOrder {
+  }): Promise<NexusOrder> {
     const title = safeText(input.title, 1500);
 
     if (title.length < 5) {
@@ -240,6 +241,12 @@ export function createNexusBrain(options: BrainOptions) {
     };
 
     orders.set(order.id, order);
+    try {
+      await persist(order);
+    } catch (error) {
+      orders.delete(order.id);
+      throw new Error(error instanceof Error ? error.message : 'Could not persist the work order.');
+    }
     queue.push(order.id);
 
     audit(
@@ -543,6 +550,29 @@ export function createNexusBrain(options: BrainOptions) {
     emitStatus();
   }
 
+  async function restore() {
+    const saved = await load();
+    for (const order of saved) {
+      orders.set(order.id, order);
+      if (['queued', 'assigned', 'in_progress'].includes(order.status)) {
+        order.status = 'queued';
+        order.progress = 0;
+        order.owner = 'Nexus Brain · recovered after restart';
+        order.error = undefined;
+        order.plan = undefined;
+        order.deliverables = [];
+        await save(order);
+        queue.push(order.id);
+      } else if (order.status === 'done' || order.status === 'review') {
+        completed++;
+      } else if (order.status === 'blocked') {
+        failed++;
+      }
+    }
+    emitStatus();
+    void pump();
+  }
+
   function getOrder(id: string) {
     return orders.get(id);
   }
@@ -555,6 +585,7 @@ export function createNexusBrain(options: BrainOptions) {
 
   return {
     enqueue,
+    restore,
     status,
     getOrder,
     listOrders,
