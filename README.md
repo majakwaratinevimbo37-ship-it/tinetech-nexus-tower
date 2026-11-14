@@ -11,7 +11,8 @@ A browser-based executive command centre for TineTech, built with React, TypeScr
 - **Central task queue:** bounded queue (default maximum 30), at most two active work orders, and at most four specialist subtasks per work order. Specialist calls are limited to two at a time.
 - **Live progress:** work-order updates and brain status are broadcast over Socket.IO and shown on the dashboard.
 - **Error reporting:** missing keys, model/API failures, malformed model responses and queue saturation become visible blocked tasks or API errors.
-- **Optional PostgreSQL:** persists task status and generated deliverables when `DATABASE_URL` is configured; otherwise the task queue is in memory.
+- **PostgreSQL-backed recovery:** production task submissions are accepted only when PostgreSQL is connected; queued and interrupted tasks are recovered and re-queued after a backend restart.
+- **API authentication:** protected API routes and Socket.IO require a server-side `NEXUS_ADMIN_TOKEN`; only health probes remain public.
 - Production website control actions remain blocked. The brain does not automatically deploy code, change the website, access Render logs, spend money, send messages, or run arbitrary tools.
 
 ## Important: what “1,000 agents” means
@@ -35,13 +36,17 @@ Gemini API usage has provider quota and may incur charges. Set usage limits or b
 1. Extract the project folder.
 2. Install Node.js LTS from <https://nodejs.org/>.
 3. Copy `.env.example` to a new file named `.env` in the project root (the startup script can create it automatically, but you need to add the key before issuing a directive).
-4. Open `.env` in Notepad and set your key:
+4. Open `.env` in Notepad and set your private configuration:
 
    ```dotenv
    GEMINI_API_KEY=put_your_private_key_here
    GEMINI_MODEL=gemini-2.5-flash
    BRAIN_MAX_QUEUE=30
+   NEXUS_ADMIN_TOKEN=put_a_random_secret_of_at_least_32_characters_here
+   DATABASE_URL=your_private_postgres_connection_string
    ```
+
+   Generate a long random admin token and keep it only in the server environment and your password manager. The app asks for it when it first connects; it is held only for the current browser session. Never commit it or put it in a `VITE_` variable.
 
    Keep the key private. Do not send it in chat, put it in client files, prefix it with `VITE_`, or commit `.env` to Git.
 5. Run `START_NEXUS_TOWER.bat`, or in a terminal at the project root run:
@@ -51,7 +56,7 @@ Gemini API usage has provider quota and may incur charges. Set usage limits or b
    npm run dev
    ```
 
-6. Open <http://localhost:5173>. The API status endpoint is <http://localhost:4000/api/brain/status>.
+6. Open <http://localhost:5173>. Enter the `NEXUS_ADMIN_TOKEN` when prompted. The API health endpoint is <http://localhost:4000/api/health>; protected dashboard data requires the token.
 7. Open **Settings → Nexus Brain**. The status should show **API KEY CONFIGURED**. If it does not, check `.env` and restart the backend.
 8. Issue a directive. Follow progress in **Work Orders**; open a completed order to inspect the specialist deliverables.
 
@@ -69,6 +74,7 @@ If the API key is absent, tasks fail safely as blocked with a setup message. The
 ## API endpoints
 
 - `GET /api/health` — server health
+All API routes except `GET /api/health` and `GET /api/website/health` require `Authorization: Bearer <NEXUS_ADMIN_TOKEN>`. Socket.IO connections require the same token in the handshake auth field.
 - `GET /api/brain/status` — provider configuration state, queue depth and counters (never returns the API key)
 - `GET /api/brain/tasks` — recent tasks known to the current process
 - `POST /api/agent/command` — enqueue a Gemini-backed directive: `{ "title": "Prepare a website performance review", "department": "webops", "priority": "normal" }`
@@ -83,11 +89,11 @@ Department IDs: `exec`, `engineering`, `product`, `sales`, `marketing`, `support
 
 ## Persistence and background operation
 
-Without `DATABASE_URL`, tasks and audit entries live in memory and are lost when the backend restarts. With PostgreSQL configured, task progress, errors, plans and deliverables are persisted. The queue itself is currently in-memory; this is not a durable job scheduler, and in-flight work is not automatically resumed after a crash. For reliable unattended operation, deploy with PostgreSQL plus a durable queue/worker service and monitoring.
+In local development, omitting `DATABASE_URL` uses in-memory storage. In production, task submission is blocked unless PostgreSQL is connected. Accepted work orders are written before entering the queue. On startup, orders left in `queued`, `assigned` or `in_progress` are reset to queued and resumed from the beginning; completed and review orders remain stored. This provides restart recovery for a single backend worker, not a multi-instance distributed scheduler.
 
-## Security before public deployment
+## Production environment
 
-This project is a development baseline, not a fully secured public multi-user service. Before exposing the API to the internet, add user authentication, authorization on command endpoints, per-user quotas, stronger rate limiting, request logging and secret management. The bounded queue and a basic in-memory limit of 10 AI command submissions per IP per hour reduce accidental overload but are not a substitute for authentication. The limit resets when the server restarts and is not a multi-instance abuse-control system. Restrict the Gemini key to the appropriate API/project where available, monitor usage, and rotate a key if it is exposed. Keep Render mutations disabled; credentials alone do not enable them.
+Set these secrets in the Render service environment (never in Git): `NEXUS_ADMIN_TOKEN`, `GEMINI_API_KEY`, and `DATABASE_URL`. Also set `NODE_ENV=production` and configure `CORS_ORIGINS` for the deployed app origin. Use a random `NEXUS_ADMIN_TOKEN` with at least 32 characters. The API fails closed when the token is missing, and production task submissions fail when PostgreSQL is unavailable. Keep Render mutations disabled; credentials alone do not enable them.
 
 ## Build and test
 
